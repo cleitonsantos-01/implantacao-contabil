@@ -3552,45 +3552,49 @@ def main():
 
             df_sug = pd.DataFrame(sug_rows)
 
+            # ── Aplicar overrides manuais persistidos ─────────────────────
+            _ovr_key = "depara_manual_overrides"
+            if _ovr_key not in st.session_state:
+                st.session_state[_ovr_key] = {}
+            for _ridx, _ov in st.session_state[_ovr_key].items():
+                if _ridx in df_sug.index:
+                    df_sug.loc[_ridx, "Cód. BHub"]          = _ov["code"]
+                    df_sug.loc[_ridx, "Classif. BHub"]       = _ov["mask"]
+                    df_sug.loc[_ridx, "Nome BHub Sugerido"]  = _ov["name"]
+                    df_sug.loc[_ridx, "Match %"]              = 100.0
+
             _fonte = "IA (Claude)" if ai_sugs else "Automática (texto)"
             st.markdown(
                 f"**Fonte das sugestões: {_fonte}.** "
-                "Edite o campo `Cód. BHub` conforme necessário e clique em "
-                "'Baixar De-Para com Sugestões'."
+                "Códigos em **:red[vermelho]** são sugestões automáticas. "
+                "Use **✏️ Editar mapeamento** abaixo para ajustar."
             )
 
             _empresas_sug = df_sug["Empresa"].unique().tolist()
             _multi_empresa = len(_empresas_sug) > 1
 
-            _col_cfg_depara = {
-                "Nome do Arquivo": st.column_config.TextColumn("Nome do Arquivo", width="medium"),
-                "Grupo": st.column_config.TextColumn("Grupo", width="small"),
-                "Cód. Antigo": st.column_config.TextColumn("Cód. Antigo", width="small"),
-                "Classif. Antiga": st.column_config.TextColumn("Classif. Antiga", width="medium"),
-                "Descrição Antiga": st.column_config.TextColumn("Descrição Antiga", width="large"),
-                "D/C": st.column_config.TextColumn("D/C", width="small"),
-                "Saldo": st.column_config.NumberColumn("Saldo", format="R$ %.2f", width="small"),
-                "Cód. BHub": st.column_config.TextColumn(
-                    "Cód. BHub ✏️", width="small",
-                    help="Edite aqui o código BHub. Deixe em branco se não souber.",
-                ),
-                "Classif. BHub": st.column_config.TextColumn("Classif. BHub", width="medium"),
-                "Nome BHub Sugerido": st.column_config.TextColumn("Nome BHub Sugerido", width="large"),
-                "Match %": st.column_config.NumberColumn("Match %", format="%.1f%%", width="small"),
-            }
-            _cols_depara = [
+            # Índices com override manual (para estilo verde)
+            _ovr_indices = set(st.session_state[_ovr_key].keys())
+
+            def _style_bhub_col(col):
+                """Vermelho = sugestão automática, verde = confirmado manualmente, cinza = vazio."""
+                out = []
+                for idx, val in col.items():
+                    if str(val) == "":
+                        out.append("color: #888888")
+                    elif idx in _ovr_indices:
+                        out.append("color: #1a7f3c; font-weight: bold")
+                    else:
+                        out.append("color: #cc0000; font-weight: bold")
+                return out
+
+            _cols_show = [
                 "Nome do Arquivo", "Grupo", "Cód. Antigo", "Classif. Antiga",
                 "Descrição Antiga", "D/C", "Saldo",
                 "Cód. BHub", "Classif. BHub", "Nome BHub Sugerido", "Match %",
             ]
-            _disabled_depara = [
-                "Nome do Arquivo", "Grupo", "Cód. Antigo", "Classif. Antiga",
-                "Descrição Antiga", "D/C", "Saldo",
-                "Classif. BHub", "Nome BHub Sugerido", "Match %",
-            ]
 
             if _multi_empresa:
-                # Um expander editável por arquivo
                 for _emp_s in _empresas_sug:
                     _df_e = df_sug[df_sug["Empresa"] == _emp_s].rename(
                         columns={"Empresa": "Nome do Arquivo"}
@@ -3600,30 +3604,113 @@ def main():
                         f"📄 {_emp_s} — {len(_df_e)} contas | Mapeadas: {_n_mapeado} / {len(_df_e)}",
                         expanded=True,
                     ):
-                        _df_e_edit = st.data_editor(
-                            _df_e[_cols_depara],
+                        st.dataframe(
+                            _df_e[_cols_show].style.apply(_style_bhub_col, subset=["Cód. BHub"]),
                             use_container_width=True,
                             height=min(40 * len(_df_e) + 38, 500),
-                            key=f"depara_editor_{_emp_s}",
-                            column_config=_col_cfg_depara,
-                            disabled=_disabled_depara,
                             hide_index=True,
                         )
-                    # Aplica edições de volta ao df_sug pelo índice original
-                    df_sug.loc[_df_e_edit.index, "Cód. BHub"] = _df_e_edit["Cód. BHub"].values
             else:
-                # Arquivo único
                 _df_single = df_sug.rename(columns={"Empresa": "Nome do Arquivo"})
-                _df_single_edit = st.data_editor(
-                    _df_single[_cols_depara],
+                st.dataframe(
+                    _df_single[_cols_show].style.apply(_style_bhub_col, subset=["Cód. BHub"]),
                     use_container_width=True,
                     height=400,
-                    key="depara_editor",
-                    column_config=_col_cfg_depara,
-                    disabled=_disabled_depara,
                     hide_index=True,
                 )
-                df_sug["Cód. BHub"] = _df_single_edit["Cód. BHub"].values
+
+            # ── Painel de edição de mapeamento ────────────────────────────
+            with st.expander("✏️ Editar mapeamento de conta", expanded=False):
+                # Seletor de qual conta editar
+                _acct_opts = [
+                    f"{row['Cód. Antigo']} — {str(row['Descrição Antiga'])[:60]}"
+                    + (f"  [{row['Empresa']}]" if _multi_empresa else "")
+                    for _, row in df_sug.iterrows()
+                ]
+                _acct_sel = st.selectbox(
+                    "Conta a editar:",
+                    _acct_opts,
+                    key="depara_edit_acct_sel",
+                )
+                _acct_pos  = _acct_opts.index(_acct_sel)
+                _acct_idx  = df_sug.index[_acct_pos]
+                _acct_row  = df_sug.loc[_acct_idx]
+                _is_manual = _acct_idx in _ovr_indices
+
+                _status_lbl = "confirmado manualmente ✅" if _is_manual else "sugestão automática 🔴"
+                st.info(
+                    f"**Mapeamento atual ({_status_lbl}):**  \n"
+                    f"Código: `{_acct_row['Cód. BHub'] or '—'}` | "
+                    f"Classificação: `{_acct_row['Classif. BHub'] or '—'}` | "
+                    f"Nome: {_acct_row['Nome BHub Sugerido'] or '—'}"
+                )
+
+                st.markdown("**Buscar no plano de contas BHub:**")
+                _bcol1, _bcol2 = st.columns([4, 1])
+                with _bcol1:
+                    _busca_txt = st.text_input(
+                        "Termo:",
+                        key="depara_busca_txt",
+                        placeholder="Ex: banco, honorarios, 4046, 4.1.01...",
+                        label_visibility="collapsed",
+                    )
+                with _bcol2:
+                    _busca_modo = st.selectbox(
+                        "Por:",
+                        ["Descrição", "Código", "Classificação"],
+                        key="depara_busca_modo",
+                        label_visibility="collapsed",
+                    )
+
+                if _busca_txt.strip():
+                    _bterm = _busca_txt.strip().upper()
+                    if _busca_modo == "Código":
+                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["code"]).upper()]
+                    elif _busca_modo == "Classificação":
+                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["mask"]).upper()]
+                    else:
+                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["name"]).upper()]
+                    _res = _res[:200]
+
+                    if _res:
+                        _df_res = pd.DataFrame([
+                            {"Código": a["code"], "Classificação": a["mask"],
+                             "Nome": a["name"], "Grupo": a["grupo"]}
+                            for a in _res
+                        ])
+                        st.caption(f"{len(_res)} conta(s) encontrada(s):")
+                        st.dataframe(
+                            _df_res, use_container_width=True,
+                            hide_index=True,
+                            height=min(40 * len(_df_res) + 38, 280),
+                        )
+                        _res_opts = [
+                            f"{a['code']} | {a['mask']} | {a['name']}"
+                            for a in _res
+                        ]
+                        _res_sel = st.selectbox(
+                            "Selecionar conta para aplicar:",
+                            _res_opts,
+                            key="depara_res_sel",
+                        )
+                        _conta_nova = _res[_res_opts.index(_res_sel)]
+
+                        if st.button("✅ Aplicar alteração", key="depara_aplicar_btn", type="primary"):
+                            st.session_state[_ovr_key][_acct_idx] = {
+                                "code": _conta_nova["code"],
+                                "mask": _conta_nova["mask"],
+                                "name": _conta_nova["name"],
+                            }
+                            st.rerun()
+                    else:
+                        st.warning("Nenhuma conta encontrada. Tente outros termos.")
+                else:
+                    st.caption("Digite um termo para buscar (ex: banco, honorários, 4046).")
+
+                if _is_manual:
+                    if st.button("🔄 Restaurar sugestão automática", key="depara_clear_ovr"):
+                        st.session_state[_ovr_key].pop(_acct_idx, None)
+                        st.rerun()
 
             n_com_bhub = (df_sug["Cód. BHub"] != "").sum()
             n_sem_bhub = len(df_sug) - n_com_bhub
