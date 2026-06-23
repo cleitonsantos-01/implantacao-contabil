@@ -3605,7 +3605,7 @@ def main():
                         expanded=True,
                     ):
                         st.dataframe(
-                            _df_e[_cols_show].style.apply(_style_bhub_col, subset=["Cód. BHub"]),
+                            _df_e[_cols_show].style.format({"Saldo": "{:.2f}", "Match %": "{:.2f}"}).apply(_style_bhub_col, subset=["Cód. BHub"]),
                             use_container_width=True,
                             height=min(40 * len(_df_e) + 38, 500),
                             hide_index=True,
@@ -3613,7 +3613,7 @@ def main():
             else:
                 _df_single = df_sug.rename(columns={"Empresa": "Nome do Arquivo"})
                 st.dataframe(
-                    _df_single[_cols_show].style.apply(_style_bhub_col, subset=["Cód. BHub"]),
+                    _df_single[_cols_show].style.format({"Saldo": "{:.2f}", "Match %": "{:.2f}"}).apply(_style_bhub_col, subset=["Cód. BHub"]),
                     use_container_width=True,
                     height=400,
                     hide_index=True,
