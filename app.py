@@ -1,7 +1,7 @@
 """
-Ferramenta de Implantação Contábil - BHub
-==========================================
-Extrai dados de balancetes PDF → Gera arquivos para Domínio + De-Para ECD
+Gerador de Carta de Responsabilidade – BHub
+============================================
+Extrai dados de balancetes PDF → Gera De-Para ECD + Domínio + Carta de Responsabilidade
 """
 
 import streamlit as st
@@ -22,8 +22,8 @@ from openpyxl.utils.datetime import to_excel
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Implantação Contábil – BHub",
-    page_icon="📊",
+    page_title="Gerador de Carta de Responsabilidade – BHub",
+    page_icon="📝",
     layout="wide",
 )
 
@@ -2751,8 +2751,652 @@ def _load_anthropic_key() -> str:
     return key.strip()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CARTA DE RESPONSABILIDADE – CONSTANTES E FUNÇÕES DE GERAÇÃO
+# ─────────────────────────────────────────────────────────────────────────────
+
+BHUB_CNPJ_CONTABIL = "43.618.130/0001-03"
+
+PREDEFINED_JUSTIFICATIONS = [
+    "",
+    "Implantação de saldo via ECD",
+    "Constituição de saldo",
+    "Validado via Extrato Bancário",
+    "Validação via Assinatura de carta de responsabilidade",
+    "Saldo constituído via conta de contra-partida",
+    "Validado via e-Social",
+    "Validado via e-CAC",
+    "Validado via FGTS Digital",
+    "Validado via PGDAS-D",
+    "Validado via QSA",
+]
+
+_MESES_PT = {
+    "January": "Janeiro", "February": "Fevereiro", "March": "Março",
+    "April": "Abril", "May": "Maio", "June": "Junho",
+    "July": "Julho", "August": "Agosto", "September": "Setembro",
+    "October": "Outubro", "November": "Novembro", "December": "Dezembro",
+}
+
+
+_MESES_PT = [
+    "", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+]
+
+def _fmt_cnpj(v: str) -> str:
+    """Formata CNPJ para XX.XXX.XXX/XXXX-XX independentemente da entrada."""
+    import re as _re
+    digits = _re.sub(r'\D', '', str(v).strip())
+    if len(digits) == 14:
+        return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:14]}"
+    return str(v).strip()
+
+
+def _fmt_date_ptbr(d) -> str:
+    """Converte date para '01 de janeiro de 2026'."""
+    try:
+        return f"{d.day:02d} de {_MESES_PT[d.month]} de {d.year}"
+    except Exception:
+        return str(d)
+
+
+def _fmt_currency_carta(v: float) -> str:
+    """Formata valor como R$ X.XXX,XX ou -R$ X.XXX,XX."""
+    if v < 0:
+        return f"-R$ {format_br(abs(v))}"
+    return f"R$ {format_br(abs(v))}"
+
+
+def generate_carta_excel(info: dict, accounts: list) -> io.BytesIO:
+    """Gera planilha Excel no formato análise de cliente / carta de responsabilidade."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Análise de Cliente"
+
+    title_font    = Font(name="Arial", bold=True, size=13)
+    label_font    = Font(name="Arial", bold=True, size=10)
+    normal_font   = Font(name="Arial", size=10)
+    header_font   = Font(name="Arial", bold=True, size=9, color="FFFFFF")
+    header_fill   = PatternFill("solid", fgColor="000000")
+    section_fill  = PatternFill("solid", fgColor="E8E8E8")
+    alt_fill      = PatternFill("solid", fgColor="F2F2F2")
+    center_align  = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align    = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    right_align   = Alignment(horizontal="right",  vertical="center")
+    thin          = Side(style="thin")
+    border        = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def _w(row, col, val, fnt=None, fil=None, aln=None, brd=None):
+        c = ws.cell(row=row, column=col, value=val)
+        if fnt: c.font       = fnt
+        if fil: c.fill       = fil
+        if aln: c.alignment  = aln
+        if brd: c.border     = brd
+        return c
+
+    # ── Cabeçalho geral ──────────────────────────────────────────────────────
+    ws.merge_cells("A1:G1")
+    _w(1, 1, "ANÁLISE DE CLIENTE", title_font, section_fill, center_align)
+    ws.row_dimensions[1].height = 26
+
+    row = 3
+    meta_fields = [
+        ("Cliente", info.get("cliente", "")),
+        ("CNPJ",    info.get("cnpj", "")),
+        ("I.E.",    info.get("ie", "")),
+        ("CCM",     info.get("ccm", "")),
+        ("Data do contrato",  info.get("data_contrato", "")),
+        ("Plano",   info.get("plano", "Contabilidade as a Service 2.0")),
+    ]
+    for lbl, val in meta_fields:
+        ws.merge_cells(f"A{row}:G{row}")
+        _w(row, 1, f"{lbl}: {val}", label_font, aln=left_align)
+        row += 1
+
+    # Competência BHub + Link na mesma linha
+    ws.merge_cells(f"A{row}:C{row}")
+    _w(row, 1, f"Competência BHub: {info.get('competencia_bhub', '')}", label_font, aln=left_align)
+    ws.merge_cells(f"D{row}:G{row}")
+    _w(row, 4, f"Link Balancete: {info.get('link_balancete', '')}", normal_font, aln=left_align)
+    row += 1
+
+    ws.merge_cells(f"A{row}:G{row}")
+    _w(row, 1, f"Balancete Implantado: {info.get('data_balancete', '')}", label_font, aln=left_align)
+    row += 2
+
+    # ── Título da seção de ajustes ────────────────────────────────────────────
+    ws.merge_cells(f"A{row}:G{row}")
+    _w(row, 1, "Sugestões de Ajustes", Font(name="Arial", bold=True, size=11), section_fill, center_align)
+    ws.row_dimensions[row].height = 20
+    row += 2
+
+    # ── Cabeçalho da tabela ───────────────────────────────────────────────────
+    date_lbl = info.get("data_balancete", "dd/mm/aaaa")
+    col_headers = [
+        "Conta de Origem",
+        f"Saldo Balancete ({date_lbl})",
+        "Valor de Ajuste",
+        "Saldo Final/Saldo Suporte",
+        "Justificativa",
+        "Sugestão de Contra-Partida – BHub",
+    ]
+    for ci, h in enumerate(col_headers, 1):
+        _w(row, ci, h, header_font, header_fill, center_align, border)
+    ws.row_dimensions[row].height = 30
+    row += 1
+
+    # ── Linhas de contas ──────────────────────────────────────────────────────
+    for i, acc in enumerate(accounts):
+        row_fill = alt_fill if i % 2 == 0 else None
+        saldo       = float(acc.get("saldo", 0) or 0)
+        ajuste      = float(acc.get("ajuste", 0) or 0)
+        saldo_final = float(acc.get("saldo_final", saldo + ajuste) or saldo + ajuste)
+        _w(row, 1, acc.get("conta", ""),          normal_font, row_fill, left_align,  border)
+        _w(row, 2, _fmt_currency_carta(saldo),    normal_font, row_fill, right_align, border)
+        _w(row, 3, _fmt_currency_carta(ajuste) if ajuste != 0 else "",
+                                                  normal_font, row_fill, right_align, border)
+        _w(row, 4, _fmt_currency_carta(saldo_final), normal_font, row_fill, right_align, border)
+        _w(row, 5, acc.get("justificativa", ""),  normal_font, row_fill, left_align,  border)
+        _w(row, 6, acc.get("contra_partida", ""), normal_font, row_fill, left_align,  border)
+        ws.row_dimensions[row].height = 16
+        row += 1
+
+    # ── Larguras ──────────────────────────────────────────────────────────────
+    for ci, w in enumerate([38, 22, 18, 24, 48, 34], 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def generate_carta_word(info: dict, accounts: list) -> io.BytesIO:
+    """Gera documento Word (.docx) da Carta de Responsabilidade."""
+    try:
+        from docx import Document as _Doc
+        from docx.shared import Pt, Cm, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _WALIGN
+        from docx.enum.table import WD_TABLE_ALIGNMENT as _TALIGN, WD_ALIGN_VERTICAL as _VALIGN
+        from docx.oxml.ns import qn as _qn
+        from docx.oxml import OxmlElement as _OxmlElement
+    except ImportError:
+        _pip_install("python-docx>=1.0.0")
+        from docx import Document as _Doc
+        from docx.shared import Pt, Cm, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _WALIGN
+        from docx.enum.table import WD_TABLE_ALIGNMENT as _TALIGN, WD_ALIGN_VERTICAL as _VALIGN
+        from docx.oxml.ns import qn as _qn
+        from docx.oxml import OxmlElement as _OxmlElement
+
+    doc = _Doc()
+    for sec in doc.sections:
+        sec.top_margin    = Cm(2.5)
+        sec.bottom_margin = Cm(2.5)
+        sec.left_margin   = Cm(3.0)
+        sec.right_margin  = Cm(2.0)
+
+    def _run(p, text, bold=False, size=11, color=None):
+        r = p.add_run(text)
+        r.font.name = "Arial"
+        r.font.size = Pt(size)
+        r.font.bold = bold
+        if color:
+            r.font.color.rgb = RGBColor(*color)
+        return r
+
+    def _para(text="", align=None, bold=False, size=11, sa=6, sb=0):
+        p = doc.add_paragraph()
+        p.alignment = align or _WALIGN.LEFT
+        p.paragraph_format.space_after  = Pt(sa)
+        p.paragraph_format.space_before = Pt(sb)
+        if text:
+            _run(p, text, bold=bold, size=size)
+        return p
+
+    def _cell_shd(cell, hex_color):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = _OxmlElement("w:shd")
+        shd.set(_qn("w:val"),   "clear")
+        shd.set(_qn("w:color"), "auto")
+        shd.set(_qn("w:fill"),  hex_color)
+        tcPr.append(shd)
+
+    # ── Título ────────────────────────────────────────────────────────────────
+    _para("Carta de Responsabilidade da Administração",
+          align=_WALIGN.CENTER, bold=True, size=16, sa=0)
+    _para("sobre os saldos contábeis",
+          align=_WALIGN.CENTER, bold=True, size=16, sa=14)
+
+    # ── Destinatário ──────────────────────────────────────────────────────────
+    for txt, b in [("À", False), ("BHUB CONTABILIDADE LTDA.", True),
+                   (f"CNPJ: {BHUB_CNPJ_CONTABIL}", True),
+                   ("Endereço: AV FRANCISCO MATARAZZO, 1500 - Andar 19 Parte – Água Branca", True),
+                   ("SAO PAULO, SP – CEP: 05.001-100", True)]:
+        _para(txt, bold=b, size=11, sa=0)
+    _para("", sa=8)
+
+    _para("Prezados Senhor(a):", bold=False, size=11, sa=10)
+
+    # ── Corpo ─────────────────────────────────────────────────────────────────
+    data_bal    = info.get("data_balancete", "")
+    competencia = info.get("competencia_bhub", "")
+    nome_emp    = info.get("cliente", "")
+    cnpj_emp    = info.get("cnpj", "")
+
+    body_p = doc.add_paragraph()
+    body_p.paragraph_format.space_after  = Pt(10)
+    body_p.paragraph_format.space_before = Pt(0)
+    segments = [
+        ("Conforme observado durante os procedimentos de transição de contabilidade, na qual a ", False),
+        ('BHUB CONTABILIDADE LTDA ("BHub"),', True),
+        (f" assumiu a contabilidade da empresa ", False),
+        (f"{nome_emp}", True),
+        (f", CNPJ: {cnpj_emp},", True),
+        (f" a partir do período-base {competencia}, não foram compartilhadas as conciliações contábeis "
+         "para as contas listadas abaixo e compreendidas no balancete para o período-base "
+         f"{data_bal} fornecido pela antiga contabilidade, e utilizado para implantação dos "
+         "saldos iniciais, impossibilitando a confirmação sobre a acuracidade das informações "
+         "contábeis recebidas. Além disso, tenho ciência do ajuste a ser efetuado no início de "
+         "competência da ", False),
+        ('BHUB CONTABILIDADE LTDA ("BHub"),', True),
+        (" conforme exposto abaixo:", False),
+    ]
+    for seg_txt, seg_bold in segments:
+        _run(body_p, seg_txt, bold=seg_bold, size=11)
+
+    # ── Tabela de contas ──────────────────────────────────────────────────────
+    n_rows = max(len(accounts), 1) + 1
+    tbl = doc.add_table(rows=n_rows, cols=4)
+    tbl.style = "Table Grid"
+    tbl.alignment = _TALIGN.CENTER
+
+    hdr_texts = [
+        "Conta de Origem",
+        f"Saldo Balancete\n({data_bal})",
+        "Valor de Ajuste",
+        "Saldo Final/\nSaldo Suporte",
+    ]
+    for ci, ht in enumerate(hdr_texts):
+        cell = tbl.rows[0].cells[ci]
+        cell.text = ""
+        p = cell.paragraphs[0]
+        p.alignment = _WALIGN.CENTER
+        cell.vertical_alignment = _VALIGN.CENTER
+        _run(p, ht, bold=True, size=9, color=(0xFF, 0xFF, 0xFF))
+        _cell_shd(cell, "000000")
+
+    for ri, acc in enumerate(accounts, start=1):
+        cells = tbl.rows[ri].cells
+        saldo       = float(acc.get("saldo", 0) or 0)
+        ajuste      = float(acc.get("ajuste", 0) or 0)
+        saldo_final = float(acc.get("saldo_final", saldo + ajuste) or saldo + ajuste)
+
+        def _tc(cell, text, align=_WALIGN.LEFT):
+            cell.text = ""
+            p = cell.paragraphs[0]
+            p.alignment = align
+            cell.vertical_alignment = _VALIGN.CENTER
+            _run(p, text, bold=False, size=8)
+
+        _tc(cells[0], acc.get("conta", ""))
+        _tc(cells[1], _fmt_currency_carta(saldo),       align=_WALIGN.RIGHT)
+        _tc(cells[2], _fmt_currency_carta(ajuste) if ajuste != 0 else "", align=_WALIGN.RIGHT)
+        _tc(cells[3], _fmt_currency_carta(saldo_final), align=_WALIGN.RIGHT)
+
+        if ri % 2 == 0:
+            for cell in tbl.rows[ri].cells:
+                _cell_shd(cell, "F2F2F2")
+
+    # ── Espaço após tabela ────────────────────────────────────────────────────
+    _para("", sa=6)
+
+    # ── Declaração ────────────────────────────────────────────────────────────
+    _para("Dessa forma, como responsável legal, declaro que:", sa=6)
+
+    for bullet in [
+        f"As informações a serem consideradas como saldos finais para o período-base {data_bal}, são as apresentadas; e",
+        'Tenho ciência dos impactos trazidos pela BHUB CONTABILIDADE LTDA ("BHub") da não entrega '
+        "das documentações listadas acima e estou de acordo com o ajuste supracitado.",
+    ]:
+        bp = doc.add_paragraph()
+        bp.paragraph_format.space_after      = Pt(4)
+        bp.paragraph_format.left_indent      = Cm(1.0)
+        bp.paragraph_format.first_line_indent = Cm(-0.5)
+        _run(bp, "•  " + bullet, bold=False, size=11)
+
+    _para("Também confirmamos que não houve/temos conhecimento de:", sa=4, sb=8)
+
+    for item in [
+        "(a)  fraude envolvendo administração ou empregados em cargos de responsabilidade ou confiança;",
+        "(b)  fraude envolvendo terceiros que poderiam ter efeito material nas demonstrações contábeis;",
+        "(c)  violação ou possíveis violações de leis, normas ou regulamentos cujos efeitos deveriam "
+              "ser considerados para divulgação nas demonstrações contábeis, ou mesmo dar origem ao "
+              "registro de provisão para contingências passivas.",
+    ]:
+        ip = doc.add_paragraph()
+        ip.paragraph_format.left_indent = Cm(0.5)
+        ip.paragraph_format.space_after = Pt(3)
+        _run(ip, item, bold=False, size=11)
+
+    # ── Cidade, data e assinatura ─────────────────────────────────────────────
+    cidade     = info.get("cidade", "São Paulo")
+    data_carta = info.get("data_carta", "")
+    _para(f"{cidade}, {data_carta}", align=_WALIGN.CENTER, sa=4, sb=14)
+    _para("Atenciosamente,", align=_WALIGN.CENTER, sa=28)
+    _para("..............................................................", align=_WALIGN.CENTER, sa=0)
+    _para(info.get("representante", "").upper(), align=_WALIGN.CENTER, sa=0)
+    _para("Representante Legal", align=_WALIGN.CENTER, sa=0)
+    if info.get("cpf", "").strip():
+        _para(f"CPF: {info['cpf'].strip()}", align=_WALIGN.CENTER, sa=0)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def generate_carta_pdf(info: dict, accounts: list) -> io.BytesIO:
+    """Gera PDF da Carta de Responsabilidade usando reportlab."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors as _rlcolors
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                        Table, TableStyle, HRFlowable)
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
+    except ImportError:
+        _pip_install("reportlab>=4.0.0")
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors as _rlcolors
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                        Table, TableStyle, HRFlowable)
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
+
+    buf = io.BytesIO()
+    doc_pdf = SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=2.5*cm, bottomMargin=2.5*cm,
+        leftMargin=3*cm, rightMargin=2*cm,
+    )
+
+    _hdr_color  = _rlcolors.HexColor("#000000")
+    _alt_color  = _rlcolors.HexColor("#F2F2F2")
+    _white      = _rlcolors.white
+    _grey       = _rlcolors.HexColor("#AAAAAA")
+
+    def _ps(name, fontName="Helvetica", fontSize=11, alignment=TA_LEFT,
+            leading=14, spaceAfter=4, spaceBefore=0, bold=False, color=None):
+        kwargs = dict(fontName=("Helvetica-Bold" if bold else fontName),
+                      fontSize=fontSize, alignment=alignment,
+                      leading=leading, spaceAfter=spaceAfter, spaceBefore=spaceBefore)
+        if color:
+            kwargs["textColor"] = color
+        return ParagraphStyle(name, **kwargs)
+
+    s_title   = _ps("title",  bold=True,  fontSize=16, alignment=TA_CENTER, spaceAfter=14)
+    s_bold    = _ps("bold",   bold=True,  fontSize=11, spaceAfter=2)
+    s_normal  = _ps("norm",   fontSize=11, spaceAfter=4)
+    s_body    = _ps("body",   fontSize=11, alignment=TA_JUSTIFY, spaceAfter=10)
+    s_center  = _ps("ctr",    fontSize=11, alignment=TA_CENTER, spaceAfter=4)
+    s_th      = _ps("th",     bold=True,  fontSize=8.5, alignment=TA_CENTER,
+                    spaceAfter=1, color=_white)
+    s_td      = _ps("td",     fontSize=8.5, leading=11, spaceAfter=1)
+    s_td_r    = _ps("td_r",   fontSize=8.5, leading=11, spaceAfter=1, alignment=TA_RIGHT)
+    s_bullet  = ParagraphStyle("blt", fontName="Helvetica", fontSize=11, leading=14,
+                               spaceAfter=6, leftIndent=18, firstLineIndent=-12)
+
+    story = []
+
+    story.append(Paragraph("Carta de Responsabilidade da Administração", s_title))
+    story.append(Paragraph("sobre os saldos contábeis", s_title))
+    story.append(Spacer(1, 0.3*cm))
+
+    story.append(Paragraph("À", s_normal))
+    story.append(Paragraph("<b>BHUB CONTABILIDADE LTDA.</b>", s_normal))
+    story.append(Paragraph(f"<b>CNPJ: {BHUB_CNPJ_CONTABIL}</b>", s_normal))
+    story.append(Paragraph("<b>Endereço: AV FRANCISCO MATARAZZO, 1500 - Andar 19 Parte – Água Branca</b>", s_normal))
+    story.append(Paragraph("<b>SAO PAULO, SP – CEP: 05.001-100</b>", s_normal))
+    story.append(Spacer(1, 0.25*cm))
+    story.append(Paragraph("<b>Prezados Senhor(a):</b>", s_normal))
+    story.append(Spacer(1, 0.25*cm))
+
+    data_bal    = info.get("data_balancete", "")
+    competencia = info.get("competencia_bhub", "")
+    nome_emp    = info.get("cliente", "")
+    cnpj_emp    = info.get("cnpj", "")
+
+    body_html = (
+        'Conforme observado durante os procedimentos de transição de contabilidade, na qual a '
+        '<b>BHUB CONTABILIDADE LTDA ("BHub"),</b> assumiu a contabilidade da empresa '
+        f'<b>{nome_emp}, CNPJ: {cnpj_emp},</b> a partir do período-base '
+        f'{competencia}, não foram compartilhadas as conciliações contábeis para as contas '
+        f'listadas abaixo e compreendidas no balancete para o período-base {data_bal} fornecido '
+        'pela antiga contabilidade, e utilizado para implantação dos saldos iniciais, '
+        'impossibilitando a confirmação sobre a acuracidade das informações contábeis recebidas. '
+        'Além disso, tenho ciência do ajuste a ser efetuado no início de competência da '
+        '<b>BHUB CONTABILIDADE LTDA ("BHub"),</b> conforme exposto abaixo:'
+    )
+    story.append(Paragraph(body_html, s_body))
+    story.append(Spacer(1, 0.2*cm))
+
+    # ── Tabela de contas ──────────────────────────────────────────────────────
+    pw = A4[0] - 5*cm
+    col_ws = [pw * 0.40, pw * 0.20, pw * 0.18, pw * 0.22]
+
+    tbl_data = [[
+        Paragraph(f"<b>Conta de Origem</b>", s_th),
+        Paragraph(f"<b>Saldo Balancete<br/>({data_bal})</b>", s_th),
+        Paragraph("<b>Valor de Ajuste</b>", s_th),
+        Paragraph("<b>Saldo Final/<br/>Saldo Suporte</b>", s_th),
+    ]]
+    row_fills_pdf = []
+    for i, acc in enumerate(accounts):
+        saldo       = float(acc.get("saldo", 0) or 0)
+        ajuste      = float(acc.get("ajuste", 0) or 0)
+        saldo_final = float(acc.get("saldo_final", saldo + ajuste) or saldo + ajuste)
+        tbl_data.append([
+            Paragraph(acc.get("conta", ""), s_td),
+            Paragraph(_fmt_currency_carta(saldo), s_td_r),
+            Paragraph(_fmt_currency_carta(ajuste) if ajuste != 0 else "", s_td_r),
+            Paragraph(_fmt_currency_carta(saldo_final), s_td_r),
+        ])
+        if i % 2 == 0:
+            row_fills_pdf.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _alt_color))
+
+    tbl_pdf = Table(tbl_data, colWidths=col_ws, repeatRows=1)
+    ts_pdf  = TableStyle([
+        ("BACKGROUND",  (0, 0), (-1, 0), _hdr_color),
+        ("GRID",        (0, 0), (-1, -1), 0.4, _grey),
+        ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",  (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",(0, 0), (-1, -1), 4),
+    ] + row_fills_pdf)
+    tbl_pdf.setStyle(ts_pdf)
+    story.append(tbl_pdf)
+    story.append(Spacer(1, 0.35*cm))
+
+    story.append(Paragraph("Dessa forma, como responsável legal, declaro que:", s_normal))
+    story.append(Paragraph(
+        f"•  As informações a serem consideradas como saldos finais para o período-base "
+        f"<b>{data_bal}</b>, são as apresentadas; e", s_bullet))
+    story.append(Paragraph(
+        '•  Tenho ciência dos impactos trazidos pela <b>BHUB CONTABILIDADE LTDA ("BHub")</b> '
+        "da não entrega das documentações listadas acima e estou de acordo com o ajuste supracitado.",
+        s_bullet))
+    story.append(Spacer(1, 0.2*cm))
+
+    story.append(Paragraph("Também confirmamos que não houve/temos conhecimento de:", s_normal))
+    for item_txt in [
+        "(a)  fraude envolvendo administração ou empregados em cargos de responsabilidade ou confiança;",
+        "(b)  fraude envolvendo terceiros que poderiam ter efeito material nas demonstrações contábeis;",
+        "(c)  violação ou possíveis violações de leis, normas ou regulamentos cujos efeitos deveriam ser "
+              "considerados para divulgação nas demonstrações contábeis, ou mesmo dar origem ao registro "
+              "de provisão para contingências passivas.",
+    ]:
+        story.append(Paragraph(item_txt, s_normal))
+
+    story.append(Spacer(1, 0.5*cm))
+    cidade     = info.get("cidade", "São Paulo")
+    data_carta = info.get("data_carta", "")
+    story.append(Paragraph(f"{cidade}, {data_carta}", s_center))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("Atenciosamente,", s_center))
+    story.append(Spacer(1, 1.2*cm))
+    story.append(Paragraph("..............................................................", s_center))
+    story.append(Paragraph(info.get("representante", "").upper(), s_center))
+    story.append(Paragraph("Representante Legal", s_center))
+    if info.get("cpf", "").strip():
+        story.append(Paragraph(f"CPF: {info['cpf'].strip()}", s_center))
+
+    doc_pdf.build(story)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANÇAMENTO DE AJUSTE – DOMÍNIO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_conta_code(conta_str: str) -> tuple:
+    """Extrai (código, descrição) de 'COD - Descrição' ou retorna ('', texto)."""
+    s = str(conta_str).strip()
+    import re as _re
+    m = _re.match(r"^(\S+)\s*[-–]\s*(.+)$", s)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", s
+
+
+def generate_ajuste_excel(accounts: list, ajuste_date: date, cod_empresa: str) -> io.BytesIO:
+    """Gera Excel Domínio para os lançamentos de ajuste da carta (1 lote por conta)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ajustes"
+
+    date_str = ajuste_date.strftime("%d/%m/%Y")
+    ws["A1"] = (
+        f"LANÇAMENTOS DE AJUSTE – Empresa: {cod_empresa} | Data: {date_str}"
+    )
+    ws["A1"].font = Font(bold=True, color="1F4E79", size=11)
+    ws.merge_cells("A1:J1")
+
+    headers = [
+        "Data", "Cód. Conta Débito", "Cód. Conta Crédito", "Valor",
+        "Cód. Histórico", "Complemento Histórico", "Inicia Lote",
+        "Código Matriz/Filial", "Centro de Custo Débito", "Centro de Custo Crédito",
+    ]
+    _hdr(ws, 2, headers)
+
+    col_w = [14, 18, 18, 16, 14, 55, 12, 20, 18, 18]
+    for i, w in enumerate(col_w, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.row_dimensions[2].height = 28
+    ws.freeze_panes = "A3"
+
+    alt = PatternFill("solid", fgColor="EEF2F7")
+    row = 3
+
+    for acc in accounts:
+        ajuste = float(acc.get("ajuste", 0) or 0)
+        if ajuste == 0:
+            continue
+
+        code, desc = _parse_conta_code(acc.get("conta", ""))
+        if not code:
+            continue
+
+        contra_raw = str(acc.get("contra_partida", "")).strip()
+        contra, _ = _parse_conta_code(contra_raw)
+        abs_val = abs(ajuste)
+        cents   = int(round(abs_val * 100))
+        hist    = f"AJUSTE DE IMPLANTAÇÃO {date_str} - {desc}"[:55]
+        fill1   = alt if row % 2 == 0 else None
+
+        def wr(r, c, v, f=None):
+            cell = ws.cell(r, c, v)
+            if f:
+                cell.fill = f
+
+        if ajuste > 0:
+            # Débito na conta → Crédito na contra
+            wr(row, 1, date_str, fill1); wr(row, 2, code, fill1); wr(row, 3, "", fill1)
+            wr(row, 4, cents, fill1);    wr(row, 5, "", fill1);   wr(row, 6, hist, fill1)
+            wr(row, 7, 1, fill1);        wr(row, 8, cod_empresa, fill1)
+            wr(row, 9, "", fill1);       wr(row, 10, "", fill1)
+            row += 1
+            if contra:
+                fill2 = alt if row % 2 == 0 else None
+                wr(row, 1, date_str, fill2); wr(row, 2, "", fill2); wr(row, 3, contra, fill2)
+                wr(row, 4, cents, fill2);    wr(row, 5, "", fill2); wr(row, 6, hist, fill2)
+                wr(row, 7, "", fill2);       wr(row, 8, "", fill2)
+                wr(row, 9, "", fill2);       wr(row, 10, "", fill2)
+                row += 1
+        else:
+            # Crédito na conta → Débito na contra
+            if contra:
+                fill1c = alt if row % 2 == 0 else None
+                wr(row, 1, date_str, fill1c); wr(row, 2, contra, fill1c); wr(row, 3, "", fill1c)
+                wr(row, 4, cents, fill1c);    wr(row, 5, "", fill1c);     wr(row, 6, hist, fill1c)
+                wr(row, 7, 1, fill1c);        wr(row, 8, cod_empresa, fill1c)
+                wr(row, 9, "", fill1c);       wr(row, 10, "", fill1c)
+                row += 1
+            fill2 = alt if row % 2 == 0 else None
+            wr(row, 1, date_str, fill2); wr(row, 2, "", fill2); wr(row, 3, code, fill2)
+            wr(row, 4, cents, fill2);    wr(row, 5, "", fill2); wr(row, 6, hist, fill2)
+            lote_v = "" if contra else 1
+            emp_v  = "" if contra else cod_empresa
+            wr(row, 7, lote_v, fill2); wr(row, 8, emp_v, fill2)
+            wr(row, 9, "", fill2);     wr(row, 10, "", fill2)
+            row += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def generate_ajuste_txt(accounts: list, ajuste_date: date, cod_empresa: str) -> str:
+    """Gera TXT Domínio para os lançamentos de ajuste da carta."""
+    lines    = []
+    date_str = ajuste_date.strftime("%d/%m/%Y")
+
+    for acc in accounts:
+        ajuste = float(acc.get("ajuste", 0) or 0)
+        if ajuste == 0:
+            continue
+
+        code, desc = _parse_conta_code(acc.get("conta", ""))
+        if not code:
+            continue
+
+        contra_raw = str(acc.get("contra_partida", "")).strip()
+        contra, _ = _parse_conta_code(contra_raw)
+        abs_val = abs(ajuste)
+        cents   = int(round(abs_val * 100))
+        hist    = f"AJUSTE DE IMPLANTAÇÃO {date_str} - {desc}"[:55]
+
+        if ajuste > 0:
+            lines.append(f"{date_str};{code};;{cents};;{hist};1;{cod_empresa};;")
+            if contra:
+                lines.append(f"{date_str};;{contra};{cents};;{hist};;;;")
+        else:
+            if contra:
+                lines.append(f"{date_str};{contra};;{cents};;{hist};1;{cod_empresa};;")
+            lines.append(f"{date_str};;{code};{cents};;{hist}{';;;;' if contra else f';1;{cod_empresa};;'}")
+
+    return "\r\n".join(lines)
+
+
 def main():
-    st.title("📊 Ferramenta de Implantação Contábil – BHub")
+    st.title("📝 Gerador de Carta de Responsabilidade – BHub")
     st.caption(
         "Extrai dados de balancetes PDF do contador anterior → "
         "Gera De-Para ECD (Ficha I057) + Planilha e TXT para importação no Domínio"
@@ -2761,11 +3405,12 @@ def main():
     # ── Sidebar ──────────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("⚙️ Parâmetros")
-        cod_empresa = st.text_input("Código da Empresa no Domínio", value="001")
-        opening_date = st.date_input("Data dos Lançamentos de Abertura", value=date(2026, 1, 1), format="DD/MM/YYYY")
+        cod_empresa = st.text_input("Código do cliente", value="",
+                                    placeholder="Código da empresa no Domínio")
+        opening_date = st.date_input("Data dos Lançamentos de Abertura", value=date.today(), format="DD/MM/YYYY")
         contra_code = st.text_input(
             "Conta de Contrapartida (modo simples)",
-            value="999",
+            value="2875",
             help="Usada apenas no modo 'Simples com conta de contrapartida'. No modo padrão (partidas dobradas) este campo é ignorado.",
         )
 
@@ -2798,10 +3443,11 @@ def main():
         """)
 
     # ── Abas ─────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📁  1. Carregar Balancetes",
         "🔀  2. De-Para (ECD I057)",
         "📤  3. Gerar Arquivos Domínio",
+        "📝  4. Carta de Responsabilidade",
     ])
 
     # ════════════════════════════════════════════════════════════════════════
@@ -3146,7 +3792,7 @@ def main():
                             placeholder="10028   ou   4.2.2.05.000013",
                         )
                     buscar_btn = st.form_submit_button(
-                        "🔍 Buscar no PDF", use_container_width=True
+                        "🔍 Buscar no arquivo", use_container_width=True
                     )
 
                 if buscar_btn:
@@ -3562,6 +4208,9 @@ def main():
                     df_sug.loc[_ridx, "Classif. BHub"]       = _ov["mask"]
                     df_sug.loc[_ridx, "Nome BHub Sugerido"]  = _ov["name"]
                     df_sug.loc[_ridx, "Match %"]              = 100.0
+
+            # Persiste o De-Para final para uso na Carta de Responsabilidade (Tab 4)
+            st.session_state["df_sug_current"] = df_sug.copy()
 
             _fonte = "IA (Claude)" if ai_sugs else "Automática (texto)"
             st.markdown(
@@ -3991,6 +4640,448 @@ def main():
                 else:
                     st.caption(f"Total: {total_lines} linhas | {total_lines // 2} lançamentos (simples)")
 
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 4 – CARTA DE RESPONSABILIDADE
+    # ════════════════════════════════════════════════════════════════════════
+    with tab4:
+        st.header("📝 Carta de Responsabilidade sobre Saldos Contábeis")
+
+        # ── Inicializar session_state ─────────────────────────────────────
+        if "carta_accounts" not in st.session_state:
+            st.session_state["carta_accounts"] = []
+
+        # ── Seção 1 – Informações da empresa ─────────────────────────────
+        with st.expander("📋 1. Informações da Empresa e do Contrato", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                carta_cliente = st.text_input(
+                    "Razão Social / Nome da Empresa", key="carta_cliente",
+                    placeholder="Ex.: ABC Comércio Ltda.")
+                carta_cnpj = st.text_input(
+                    "CNPJ da Empresa", key="carta_cnpj",
+                    placeholder="00.000.000/0000-00")
+                carta_ie = st.text_input(
+                    "Inscrição Estadual (I.E.)", key="carta_ie",
+                    placeholder="Isento ou número")
+                carta_ccm = st.text_input(
+                    "Inscrição Municipal (CCM)", key="carta_ccm",
+                    placeholder="Isento ou número")
+            with col2:
+                carta_data_contrato = st.text_input(
+                    "Data de assinatura do contrato", key="carta_data_contrato",
+                    placeholder="dd/mm/aaaa")
+                carta_plano = st.text_input(
+                    "Plano", key="carta_plano",
+                    placeholder="Ex.: Contabilidade as a Service 2.0")
+                carta_competencia = st.text_input(
+                    "Competência BHub (início)", key="carta_competencia",
+                    placeholder="mm/aaaa  ex: 01/2024")
+                carta_data_balancete = st.text_input(
+                    "Data do Balancete Implantado", key="carta_data_balancete",
+                    placeholder="dd/mm/aaaa")
+                carta_link = st.text_input(
+                    "Link do Balancete (Drive ou similar)",
+                    key="carta_link", placeholder="https://...")
+
+        # ── Seção 2 – Informações da carta ───────────────────────────────
+        with st.expander("✍️ 2. Informações da Carta e do Assinante", expanded=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                carta_cidade = st.text_input(
+                    "Cidade", key="carta_cidade", value="São Paulo")
+            with col2:
+                carta_data_carta = st.date_input(
+                    "Data da Carta", key="carta_data_carta",
+                    value=None, format="DD/MM/YYYY")
+            with col3:
+                carta_representante = st.text_input(
+                    "Nome do Representante Legal", key="carta_representante",
+                    placeholder="Nome completo do responsável")
+                carta_cpf = st.text_input(
+                    "CPF do Representante (opcional)", key="carta_cpf",
+                    placeholder="000.000.000-00")
+
+        # ── Seção 3 – Tabela de contas ───────────────────────────────────
+        st.subheader("3. Contas e Saldos para a Carta")
+
+        # Importar do balancete carregado
+        col_imp, col_rep_lbl, col_rep, col_rep_manual, col_rep_btn, col_clr_jus, col_add, col_clr = st.columns(
+            [2, 1.4, 2, 1.8, 1, 1.2, 1, 1])
+
+        with col_imp:
+            if st.button("⬇️ Importar do Balancete", use_container_width=True,
+                         help="Importa as contas usando os códigos BHub do De-Para (Aba 2)"):
+                all_dfs = st.session_state.get("all_dfs", {})
+                df_sug_ref = st.session_state.get("df_sug_current")
+
+                # Monta lookup: código antigo → (código BHub, nome BHub)
+                bhub_lookup = {}
+                if df_sug_ref is not None and not df_sug_ref.empty:
+                    for _, sr in df_sug_ref.iterrows():
+                        old_c  = str(sr.get("Cód. Antigo", "")).strip()
+                        bhub_c = str(sr.get("Cód. BHub", "")).strip()
+                        bhub_n = str(sr.get("Nome BHub Sugerido", "")).strip()
+                        if old_c and bhub_c:
+                            bhub_lookup[old_c] = (bhub_c, bhub_n)
+
+                rows_imp = []
+                for emp_key, df_bal in all_dfs.items():
+                    if df_bal is None or df_bal.empty:
+                        continue
+                    for _, r in df_bal.iterrows():
+                        cod  = str(r.get("code", "")).strip()
+                        desc = str(r.get("description", "")).strip()
+                        val  = float(r.get("current_value", 0) or 0)
+                        ind  = str(r.get("current_indicator", "D")).strip()
+                        saldo_v = val if ind == "D" else -val
+
+                        # Usa código BHub se disponível no De-Para
+                        if cod in bhub_lookup:
+                            bhub_c, bhub_n = bhub_lookup[cod]
+                            conta_label = f"{bhub_c} - {bhub_n}" if bhub_n else bhub_c
+                        else:
+                            conta_label = f"{cod} - {desc}" if cod else desc
+
+                        rows_imp.append({
+                            "conta":          conta_label,
+                            "saldo":          round(saldo_v, 2),
+                            "ajuste":         0.0,
+                            "saldo_final":    round(saldo_v, 2),
+                            "justificativa":  "",
+                            "contra_partida": "",
+                        })
+                if rows_imp:
+                    st.session_state["carta_accounts"] = rows_imp
+                    suffix = " com códigos BHub do De-Para" if bhub_lookup else " (acesse a Aba 2 para mapear os códigos BHub)"
+                    st.success(f"{len(rows_imp)} contas importadas{suffix}.")
+                else:
+                    st.warning("Nenhum balancete carregado na Aba 1.")
+
+        with col_rep_lbl:
+            st.markdown("<div style='padding-top:28px;'>Replicar justificativa:</div>",
+                        unsafe_allow_html=True)
+        with col_rep:
+            jus_replicate = st.selectbox(
+                "Justificativa",
+                options=PREDEFINED_JUSTIFICATIONS,
+                key="carta_jus_replicate",
+                label_visibility="collapsed",
+            )
+        with col_rep_manual:
+            jus_manual = st.text_input(
+                "Justificativa manual",
+                key="carta_jus_manual",
+                label_visibility="collapsed",
+                placeholder="ou digitar manualmente...",
+            )
+        with col_rep_btn:
+            if st.button("↩️ Para todas", use_container_width=True,
+                         help="Replica a justificativa para todas as linhas (campo manual tem prioridade sobre o seletor)"):
+                jus_final = jus_manual.strip() if jus_manual.strip() else jus_replicate
+                for acc in st.session_state["carta_accounts"]:
+                    acc["justificativa"] = jus_final
+                st.rerun()
+
+        with col_clr_jus:
+            if st.button("🧹 Limpar just.", use_container_width=True,
+                         help="Remove a justificativa de todas as linhas"):
+                for acc in st.session_state["carta_accounts"]:
+                    acc["justificativa"] = ""
+                st.rerun()
+
+        with col_add:
+            if st.button("➕ Linha", use_container_width=True):
+                st.session_state["carta_accounts"].append({
+                    "conta": "", "saldo": 0.0, "ajuste": 0.0,
+                    "saldo_final": 0.0, "justificativa": "", "contra_partida": "",
+                })
+                st.rerun()
+
+        with col_clr:
+            if st.button("🗑️ Limpar", use_container_width=True):
+                st.session_state["carta_accounts"] = []
+                st.rerun()
+
+        # Editor da tabela
+        if not st.session_state["carta_accounts"]:
+            st.session_state["carta_accounts"] = [{
+                "conta": "", "saldo": 0.0, "ajuste": 0.0,
+                "saldo_final": 0.0, "justificativa": "", "contra_partida": "",
+            }]
+
+        df_carta = pd.DataFrame(st.session_state["carta_accounts"])
+
+        edited = st.data_editor(
+            df_carta,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "conta": st.column_config.TextColumn(
+                    "Conta de Origem",
+                    help="Código + Descrição da conta",
+                    width="large",
+                ),
+                "saldo": st.column_config.NumberColumn(
+                    "Saldo Balancete",
+                    help="Saldo conforme balancete (D=positivo, C=negativo)",
+                    format="%.2f",
+                    width="medium",
+                ),
+                "ajuste": st.column_config.NumberColumn(
+                    "Valor de Ajuste",
+                    help="Valor do ajuste no 1° dia da competência BHub",
+                    format="%.2f",
+                    width="medium",
+                ),
+                "saldo_final": st.column_config.NumberColumn(
+                    "Saldo Final",
+                    help="Calculado automaticamente: Saldo + Ajuste",
+                    format="%.2f",
+                    width="medium",
+                    disabled=True,
+                ),
+                "justificativa": st.column_config.TextColumn(
+                    "Justificativa",
+                    help="Digite livremente ou use o seletor + 'Para todas' acima",
+                    width="large",
+                ),
+                "contra_partida": st.column_config.TextColumn(
+                    "Contra-Partida BHub",
+                    help="Sugestão de conta de contra-partida no plano BHub",
+                    width="large",
+                ),
+            },
+            key="carta_editor",
+        )
+
+        # Recalcular saldo_final, auto-popular contra-partida e persistir
+        edited_list = edited.to_dict("records")
+        _sf_changed = False
+        for row in edited_list:
+            s = float(row.get("saldo", 0) or 0)
+            a = float(row.get("ajuste", 0) or 0)
+            new_sf = round(s + a, 2)
+            if abs(new_sf - float(row.get("saldo_final", 0) or 0)) > 0.001:
+                _sf_changed = True
+            row["saldo_final"] = new_sf
+            # Auto-preenche contra-partida quando há ajuste e campo ainda vazio
+            if a != 0 and not str(row.get("contra_partida", "")).strip():
+                row["contra_partida"] = "2875 - AJUSTES DE EXERCÍCIOS ANTERIORES"
+        st.session_state["carta_accounts"] = edited_list
+        # Força rerun para atualizar a coluna Saldo Final (disabled) no editor
+        if _sf_changed:
+            st.rerun()
+
+        # ── Resumo de totais do Saldo Balancete ──────────────────────────
+        total_deb = sum(r["saldo"] for r in edited_list if float(r.get("saldo", 0) or 0) > 0)
+        total_cre = sum(abs(float(r.get("saldo", 0) or 0)) for r in edited_list if float(r.get("saldo", 0) or 0) < 0)
+        diferenca = total_deb - total_cre
+
+        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+        col_r1.metric("Total Débito – Saldo Balancete", f"R$ {format_br(total_deb)}")
+        col_r2.metric("Total Crédito – Saldo Balancete", f"R$ {format_br(total_cre)}")
+        col_r3.metric("Diferença", f"R$ {format_br(abs(diferenca))}")
+        with col_r4:
+            if abs(diferenca) < 0.01:
+                st.success("✅ Balanceado")
+            else:
+                natureza = "D" if diferenca > 0 else "C"
+                st.warning(f"⚠️ Diferença de R$ {format_br(abs(diferenca))} ({natureza})")
+
+        # ── Seção 4 – Downloads ──────────────────────────────────────────
+        st.subheader("4. Exportar")
+
+        info_carta = {
+            "cliente":         st.session_state.get("carta_cliente", ""),
+            "cnpj":            _fmt_cnpj(st.session_state.get("carta_cnpj", "")),
+            "ie":              st.session_state.get("carta_ie", ""),
+            "ccm":             st.session_state.get("carta_ccm", ""),
+            "data_contrato":   st.session_state.get("carta_data_contrato", ""),
+            "plano":           st.session_state.get("carta_plano", ""),
+            "competencia_bhub": st.session_state.get("carta_competencia", ""),
+            "data_balancete":  st.session_state.get("carta_data_balancete", ""),
+            "link_balancete":  st.session_state.get("carta_link", ""),
+            "cidade":          st.session_state.get("carta_cidade", "São Paulo"),
+            "data_carta":      _fmt_date_ptbr(st.session_state["carta_data_carta"]) if st.session_state.get("carta_data_carta") else "",
+            "representante":   st.session_state.get("carta_representante", ""),
+            "cpf":             st.session_state.get("carta_cpf", ""),
+        }
+        nome_arq = (info_carta["cliente"] or "empresa").replace(" ", "_").replace("/", "-")
+
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+        with col_dl1:
+            if st.button("📊 Gerar Excel", use_container_width=True, type="primary"):
+                with st.spinner("Gerando planilha..."):
+                    try:
+                        buf_xl = generate_carta_excel(info_carta, edited_list)
+                        st.download_button(
+                            "⬇️ Baixar Excel",
+                            data=buf_xl,
+                            file_name=f"Carta_Responsabilidade_{nome_arq}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar Excel: {e}")
+
+        with col_dl2:
+            if st.button("📄 Gerar Word (.docx)", use_container_width=True, type="primary"):
+                with st.spinner("Gerando documento Word..."):
+                    try:
+                        buf_docx = generate_carta_word(info_carta, edited_list)
+                        st.download_button(
+                            "⬇️ Baixar Word",
+                            data=buf_docx,
+                            file_name=f"Carta_Responsabilidade_{nome_arq}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar Word: {e}")
+
+        with col_dl3:
+            if st.button("📑 Gerar PDF", use_container_width=True, type="primary"):
+                with st.spinner("Gerando PDF..."):
+                    try:
+                        buf_pdf = generate_carta_pdf(info_carta, edited_list)
+                        st.download_button(
+                            "⬇️ Baixar PDF",
+                            data=buf_pdf,
+                            file_name=f"Carta_Responsabilidade_{nome_arq}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar PDF: {e}")
+
+        # ── Seção 5 – Lançamento de Ajuste (Domínio) ─────────────────────
+        st.divider()
+        st.subheader("5. Lançamento de Ajuste – Domínio")
+        st.caption(
+            "Gera os lançamentos de ajuste da carta no formato da Planilha Modelo Domínio "
+            "(Excel + TXT), prontos para importação."
+        )
+
+        # Deriva data de ajuste do campo Competência BHub (mm/aaaa → 01/mm/aaaa)
+        _competencia_raw = st.session_state.get("carta_competencia", "").strip()
+        _default_ajuste_date = opening_date  # fallback sidebar
+        try:
+            if _competencia_raw:
+                _parts = _competencia_raw.replace("-", "/").split("/")
+                if len(_parts) == 2:
+                    _mes, _ano = int(_parts[0]), int(_parts[1])
+                    _default_ajuste_date = date(_ano, _mes, 1)
+        except Exception:
+            pass
+
+        col_aj_a, col_aj_b = st.columns(2)
+        with col_aj_a:
+            carta_ajuste_date = st.date_input(
+                "Data do lançamento de ajuste",
+                value=_default_ajuste_date,
+                key="carta_ajuste_date",
+                format="DD/MM/YYYY",
+                help="Preenchido automaticamente com o 1° dia da Competência BHub informada acima.",
+            )
+        with col_aj_b:
+            carta_ajuste_empresa = st.text_input(
+                "Código da Empresa no Domínio",
+                value=cod_empresa,
+                key="carta_ajuste_empresa",
+            )
+
+        contas_com_ajuste = [r for r in edited_list if float(r.get("ajuste", 0) or 0) != 0]
+        if not contas_com_ajuste:
+            st.info("Nenhuma conta possui Valor de Ajuste preenchido na tabela acima.")
+        else:
+            st.caption(f"{len(contas_com_ajuste)} conta(s) com ajuste detectada(s).")
+
+            with st.expander("📋 Prévia dos lançamentos de ajuste", expanded=False):
+                prev_rows = []
+                _date_str = carta_ajuste_date.strftime("%d/%m/%Y")
+                _net_pl = 0.0   # impacto líquido em Lucros/Prejuízos Acumulados
+
+                for acc in contas_com_ajuste:
+                    ajuste_v = float(acc.get("ajuste", 0) or 0)
+                    code, desc = _parse_conta_code(acc.get("conta", ""))
+                    contra_raw = str(acc.get("contra_partida", "")).strip() or "2875 - AJUSTES DE EXERCÍCIOS ANTERIORES"
+                    contra_c, _ = _parse_conta_code(contra_raw)
+                    abs_val = abs(ajuste_v)
+                    hist = f"AJUSTE DE IMPLANTAÇÃO {_date_str} - {desc}"[:55]
+
+                    if ajuste_v > 0:
+                        # D: conta  |  C: Lucros Acumulados → Lucros aumenta (crédito)
+                        deb, cre = code or acc.get("conta", ""), contra_c or contra_raw
+                        _net_pl += abs_val    # crédito em Lucros
+                    else:
+                        # D: Lucros Acumulados  |  C: conta → Lucros diminui (débito)
+                        deb, cre = contra_c or contra_raw, code or acc.get("conta", "")
+                        _net_pl -= abs_val    # débito em Lucros
+
+                    prev_rows.append({
+                        "Data":       _date_str,
+                        "Débito":     deb,
+                        "Crédito":    cre,
+                        "Valor (R$)": f"R$ {format_br(abs_val)}",
+                        "Histórico":  hist,
+                    })
+
+                df_prev = pd.DataFrame(prev_rows)
+                st.dataframe(df_prev, use_container_width=True, hide_index=True)
+
+                # Impacto líquido em Lucros/Prejuízos Acumulados
+                st.divider()
+                st.markdown("**Impacto líquido no Patrimônio Líquido (Lucros/Prejuízos Acumulados):**")
+                cp1, cp2, cp3 = st.columns(3)
+                cp1.metric("Qtd. lançamentos", len(prev_rows))
+                cp2.metric("Valor total movimentado", f"R$ {format_br(sum(abs(float(r.get('ajuste',0) or 0)) for r in contas_com_ajuste))}")
+                if abs(_net_pl) < 0.01:
+                    cp3.metric("Saldo líquido em 2875", "R$ 0,00 — Neutro")
+                elif _net_pl > 0:
+                    cp3.metric("Saldo líquido em 2875", f"+ R$ {format_br(_net_pl)}",
+                               delta="Crédito (aumenta PL)", delta_color="normal")
+                else:
+                    cp3.metric("Saldo líquido em 2875", f"- R$ {format_br(abs(_net_pl))}",
+                               delta="Débito (reduz PL)", delta_color="inverse")
+
+        col_aj1, col_aj2 = st.columns(2)
+
+        with col_aj1:
+            if st.button("📊 Excel – Lançamento Ajuste", use_container_width=True,
+                         disabled=not contas_com_ajuste):
+                with st.spinner("Gerando Excel..."):
+                    try:
+                        buf_aj = generate_ajuste_excel(
+                            contas_com_ajuste, carta_ajuste_date, carta_ajuste_empresa
+                        )
+                        st.download_button(
+                            "⬇️ Baixar Excel (Ajuste)",
+                            data=buf_aj,
+                            file_name=f"Lancamento_Ajuste_{nome_arq}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar Excel: {e}")
+
+        with col_aj2:
+            if st.button("📄 TXT – Lançamento Ajuste", use_container_width=True,
+                         disabled=not contas_com_ajuste):
+                with st.spinner("Gerando TXT..."):
+                    try:
+                        txt_aj = generate_ajuste_txt(
+                            contas_com_ajuste, carta_ajuste_date, carta_ajuste_empresa
+                        )
+                        st.download_button(
+                            "⬇️ Baixar TXT (Ajuste)",
+                            data=txt_aj.encode("utf-8"),
+                            file_name=f"Lancamento_Ajuste_{nome_arq}.txt",
+                            mime="text/plain",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar TXT: {e}")
 
 
 def generate_dominio_from_depara(
