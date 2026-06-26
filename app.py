@@ -1,6 +1,6 @@
 """
-Gerador de Carta de Responsabilidade – BHub
-============================================
+Implantação de saldo e Implantação de saldo e Gerador de Carta de Responsabilidade – BHub
+==================================================================
 Extrai dados de balancetes PDF → Gera De-Para ECD + Domínio + Carta de Responsabilidade
 """
 
@@ -22,7 +22,7 @@ from openpyxl.utils.datetime import to_excel
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Gerador de Carta de Responsabilidade – BHub",
+    page_title="Implantação de saldo e Gerador de Carta de Responsabilidade – BHub",
     page_icon="📝",
     layout="wide",
 )
@@ -3412,7 +3412,7 @@ def generate_ajuste_txt(accounts: list, ajuste_date: date, cod_empresa: str) -> 
 
 
 def main():
-    st.title("📝 Gerador de Carta de Responsabilidade – BHub")
+    st.title("📝 Implantação de saldo e Gerador de Carta de Responsabilidade – BHub")
     st.caption(
         "Extrai dados de balancetes PDF do contador anterior → "
         "Gera De-Para ECD (Ficha I057) + Planilha e TXT para importação no Domínio"
