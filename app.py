@@ -3796,44 +3796,135 @@ def main():
 
                 empresas_disponiveis = list(all_dfs.keys())
 
-                # ── Passo 1: Buscar ────────────────────────────────────────
-                with st.form("form_busca_conta", clear_on_submit=False):
-                    st.markdown("**Informe o Código ou a Classificação da conta ausente:**")
-                    col_emp, col_busca = st.columns([2, 3])
-                    with col_emp:
-                        nova_empresa = st.selectbox("Empresa", empresas_disponiveis)
-                    with col_busca:
-                        busca = st.text_input(
-                            "Código ou Classificação",
-                            placeholder="10028   ou   4.2.2.05.000013",
-                        )
-                    buscar_btn = st.form_submit_button(
-                        "🔍 Buscar no arquivo", use_container_width=True
-                    )
+                # ── Modo de adição ─────────────────────────────────────────
+                _modo_adicao = st.radio(
+                    "Como deseja adicionar a conta?",
+                    ["🔍 Buscar no PDF", "✏️ Inserir manualmente"],
+                    horizontal=True,
+                    key="modo_adicao_conta",
+                )
+                # Limpa resultado de busca ao trocar de modo
+                if _modo_adicao == "✏️ Inserir manualmente":
+                    st.session_state.pop("found_account", None)
 
-                if buscar_btn:
-                    termo = busca.strip()
-                    if not termo:
-                        st.error("Informe o código ou a classificação.")
-                    else:
-                        pool = st.session_state.get("all_records", {}).get(nova_empresa, [])
-                        encontrado = next(
-                            (r for r in pool
-                             if r.get("code", "") == termo
-                             or r.get("classification", "") == termo),
-                            None,
-                        )
-                        if encontrado is None:
-                            st.session_state.pop("found_account", None)
-                            st.error(
-                                f"Conta **'{termo}'** não encontrada nos registros extraídos "
-                                f"do PDF de **{nova_empresa}**. "
-                                "Verifique se o PDF foi carregado e se o código/classificação está correto."
+                if _modo_adicao == "🔍 Buscar no PDF":
+                    # ── Passo 1-A: Buscar no arquivo ───────────────────────
+                    with st.form("form_busca_conta", clear_on_submit=False):
+                        st.markdown("**Informe o Código ou a Classificação da conta ausente:**")
+                        col_emp, col_busca = st.columns([2, 3])
+                        with col_emp:
+                            nova_empresa = st.selectbox("Empresa", empresas_disponiveis)
+                        with col_busca:
+                            busca = st.text_input(
+                                "Código ou Classificação",
+                                placeholder="10028   ou   4.2.2.05.000013",
                             )
+                        buscar_btn = st.form_submit_button(
+                            "🔍 Buscar no arquivo", use_container_width=True
+                        )
+
+                    if buscar_btn:
+                        termo = busca.strip()
+                        if not termo:
+                            st.error("Informe o código ou a classificação.")
                         else:
-                            st.session_state["found_account"] = {
-                                **encontrado, "empresa": nova_empresa
+                            pool = st.session_state.get("all_records", {}).get(nova_empresa, [])
+                            encontrado = next(
+                                (r for r in pool
+                                 if r.get("code", "") == termo
+                                 or r.get("classification", "") == termo),
+                                None,
+                            )
+                            if encontrado is None:
+                                st.session_state.pop("found_account", None)
+                                st.error(
+                                    f"Conta **'{termo}'** não encontrada nos registros extraídos "
+                                    f"do PDF de **{nova_empresa}**. "
+                                    "Verifique se o PDF foi carregado e se o código/classificação está correto."
+                                )
+                            else:
+                                st.session_state["found_account"] = {
+                                    **encontrado, "empresa": nova_empresa
+                                }
+
+                else:
+                    # ── Passo 1-B: Inserir manualmente ─────────────────────
+                    with st.form("form_manual_conta", clear_on_submit=True):
+                        st.markdown("**Preencha os dados da conta** _(* obrigatório)_:")
+                        _mc1, _mc2, _mc3 = st.columns([2, 1, 1])
+                        with _mc1:
+                            _nova_emp_m = st.selectbox("Empresa *", empresas_disponiveis, key="sel_emp_manual")
+                        with _mc2:
+                            _cod_m = st.text_input("Código *", placeholder="ex: 999")
+                        with _mc3:
+                            _dc_m = st.selectbox("D/C *", ["D — Devedor", "C — Credor"])
+
+                        _mc4, _mc5 = st.columns([3, 1])
+                        with _mc4:
+                            _desc_m = st.text_input("Descrição *", placeholder="ex: CONTA TRANSITÓRIA ESPECIAL")
+                        with _mc5:
+                            _val_m = st.number_input("Valor (R$) *", min_value=0.0, step=0.01, format="%.2f")
+
+                        _cls_m = st.text_input(
+                            "Classificação (opcional)",
+                            placeholder="ex: 1.1.9.01.000001 — deixe vazio se não souber",
+                        )
+                        _submit_manual = st.form_submit_button(
+                            "✅ Adicionar Conta", type="primary", use_container_width=True
+                        )
+
+                    if _submit_manual:
+                        _cod_m_v   = _cod_m.strip()
+                        _desc_m_v  = _desc_m.strip()
+                        _cls_m_v   = _cls_m.strip()
+                        _dc_final  = "D" if _dc_m.startswith("D") else "C"
+
+                        if not _cod_m_v or not _desc_m_v or _val_m == 0.0:
+                            st.error("Código, Descrição e Valor são obrigatórios e Valor deve ser > 0.")
+                        else:
+                            # Auto-derivar grupo pela classificação ou D/C
+                            if _cls_m_v:
+                                _grupo_m = get_account_group(_cls_m_v)
+                            else:
+                                _grupo_m = "Ativo" if _dc_final == "D" else "Passivo/PL"
+
+                            _new_acc_m = {
+                                "code":               _cod_m_v,
+                                "classification":     _cls_m_v,
+                                "description":        _desc_m_v,
+                                "debit_mv":           _val_m if _dc_final == "D" else 0.0,
+                                "credit_mv":          _val_m if _dc_final == "C" else 0.0,
+                                "current_value":      _val_m,
+                                "current_indicator":  _dc_final,
+                                "tipo":               "A",
+                                "grupo":              _grupo_m,
+                                "empresa":            _nova_emp_m,
                             }
+
+                            _ja_existe_m = any(
+                                a["code"] == _cod_m_v and a["empresa"] == _nova_emp_m
+                                for a in st.session_state["manual_accounts"]
+                            )
+                            if _ja_existe_m:
+                                st.warning(f"A conta {_cod_m_v} já foi adicionada para {_nova_emp_m}.")
+                            else:
+                                st.session_state["manual_accounts"].append(_new_acc_m)
+                                _new_row_m = pd.DataFrame([_new_acc_m])
+                                if "df_all" in st.session_state:
+                                    st.session_state["df_all"] = pd.concat(
+                                        [st.session_state["df_all"], _new_row_m], ignore_index=True
+                                    )
+                                if "all_dfs" in st.session_state:
+                                    _adfs = st.session_state["all_dfs"]
+                                    if _nova_emp_m in _adfs:
+                                        _adfs[_nova_emp_m] = pd.concat(
+                                            [_adfs[_nova_emp_m], _new_row_m], ignore_index=True
+                                        )
+                                    else:
+                                        _adfs[_nova_emp_m] = _new_row_m.copy()
+                                st.session_state["last_added_acc"]    = _new_acc_m
+                                st.session_state["conta_adicionada_ok"] = True
+                                st.rerun()
 
                 # ── Passo 2: Confirmar ─────────────────────────────────────
                 if "found_account" in st.session_state:
