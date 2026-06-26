@@ -2410,7 +2410,12 @@ def _parse_lines(text: str) -> list[dict]:
         code = cls = None
         i = 0
 
-        # Tentar extrair código numérico e classificação
+        # Pular tokens de texto inicial (cabeçalhos de seção como "COLIGADA I"
+        # que o pdfplumber une na mesma linha do registro)
+        while i < len(tokens) and not _CODE_RE.match(tokens[i]) and not _CLS_RE.match(tokens[i]):
+            i += 1
+
+        # Extrair código numérico e classificação
         if i < len(tokens) and _CODE_RE.match(tokens[i]):
             code = tokens[i]; i += 1
         if i < len(tokens) and _CLS_RE.match(tokens[i]):
