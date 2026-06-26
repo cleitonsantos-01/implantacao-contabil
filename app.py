@@ -2105,56 +2105,67 @@ def suggest_bhub(name: str, grupo: str, old_cls: str = "", n: int = 3) -> list[d
 # DETECÇÃO DE ESTRUTURA BHUB
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _is_bhub_structure(df: pd.DataFrame, threshold: float = 0.50) -> tuple[bool, str]:
+def _is_bhub_structure(df: pd.DataFrame, threshold: float = 0.35) -> tuple[bool, str]:
     """
     Verifica se o balancete já usa a estrutura de contas BHub.
     Retorna (is_bhub, motivo).
-    Critérios — basta UM atingir >= threshold (50%):
-      1. Códigos de conta batem com códigos BHub
-      2. Classificações no formato BHub  (ex.: 1.1.01.01.00001)
-      3. Descrições idênticas a nomes BHub
+
+    Lógica: exige COMBINAÇÃO de critérios — um critério isolado não é suficiente.
+      1. Prioridade: código BHub + (classificação OU descrição) bater no mesmo registro
+      2. Fallback: classificação no formato BHub + descrição igual ao nome BHub
+    Threshold padrão: 35% das contas precisam satisfazer a combinação.
     """
     import re as _re
-    # Formato real BHub: X.X.XX.XX.XXXXX  (2º segmento = 1 dígito)
+
     _bhub_mask_re = _re.compile(r'^\d\.\d{1,2}\.\d{2}\.\d{2}\.\d{5}$')
-    _bhub_names   = {_norm(a["name"]) for a in BHUB_ACCOUNTS}
-    _bhub_codes   = {str(a["code"]).strip() for a in BHUB_ACCOUNTS if a.get("code")}
+
+    # Índice por código: code -> lista de (mask, norm_name)
+    _bhub_by_code: dict[str, list[tuple[str, str]]] = {}
+    for a in BHUB_ACCOUNTS:
+        c = str(a.get("code", "")).strip()
+        if c:
+            _bhub_by_code.setdefault(c, []).append(
+                (a["mask"].strip(), _norm(a["name"]))
+            )
+    _bhub_names = {_norm(a["name"]) for a in BHUB_ACCOUNTS}
 
     total = len(df)
     if total == 0:
         return False, ""
 
-    code_hits = sum(
-        1 for code in df["code"].astype(str)
-        if code.strip() in _bhub_codes
-    )
-    mask_hits = sum(
-        1 for cls in df["classification"].astype(str)
-        if _bhub_mask_re.match(cls.strip())
-    )
-    name_hits = sum(
-        1 for desc in df["description"].astype(str)
-        if _norm(desc) in _bhub_names
-    )
+    # ── Critério 1: código + (classificação OU descrição) no mesmo registro BHub ──
+    triple_hits = 0
+    mask_name_hits = 0  # classificação formato BHub + descrição BHub (sem código)
 
-    code_ratio = code_hits / total
-    mask_ratio = mask_hits / total
-    name_ratio = name_hits / total
+    for _, row in df.iterrows():
+        code  = str(row.get("code", "")).strip()
+        mask  = str(row.get("classification", "")).strip()
+        name_n = _norm(str(row.get("description", "")))
 
-    if code_ratio >= threshold:
+        mask_is_bhub = bool(_bhub_mask_re.match(mask))
+        name_is_bhub = name_n in _bhub_names
+
+        if code in _bhub_by_code:
+            for bhub_mask, bhub_name in _bhub_by_code[code]:
+                if mask == bhub_mask or name_n == bhub_name:
+                    triple_hits += 1
+                    break
+
+        if mask_is_bhub and name_is_bhub:
+            mask_name_hits += 1
+
+    triple_ratio    = triple_hits    / total
+    mask_name_ratio = mask_name_hits / total
+
+    if triple_ratio >= threshold:
         return True, (
-            f"{code_hits} de {total} contas ({code_ratio:.0%}) têm código "
-            f"idêntico ao plano padrão BHub"
+            f"{triple_hits} de {total} contas ({triple_ratio:.0%}) têm código BHub "
+            f"combinado com classificação ou descrição coincidentes"
         )
-    if mask_ratio >= threshold:
+    if mask_name_ratio >= threshold:
         return True, (
-            f"{mask_hits} de {total} contas ({mask_ratio:.0%}) têm classificação "
-            f"no formato padrão BHub (ex.: 1.1.01.01.00001)"
-        )
-    if name_ratio >= threshold:
-        return True, (
-            f"{name_hits} de {total} contas ({name_ratio:.0%}) têm descrições "
-            f"idênticas ao plano BHub"
+            f"{mask_name_hits} de {total} contas ({mask_name_ratio:.0%}) têm "
+            f"classificação no formato BHub e descrição idêntica ao plano"
         )
     return False, ""
 
