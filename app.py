@@ -4315,6 +4315,8 @@ def main():
                     df_sug.loc[_ridx, "Classif. BHub"]       = _ov["mask"]
                     df_sug.loc[_ridx, "Nome BHub Sugerido"]  = _ov["name"]
                     df_sug.loc[_ridx, "Match %"]              = 100.0
+                    if _ov.get("value") is not None:
+                        df_sug.loc[_ridx, "Saldo"] = _ov["value"]
 
             # Persiste o De-Para final para uso na Carta de Responsabilidade (Tab 4)
             st.session_state["df_sug_current"] = df_sug.copy()
@@ -4500,6 +4502,11 @@ def main():
                             key="depara_cust_cls",
                             placeholder="Ex: 9.1.01.01.00001",
                         )
+                        _cust_val_str = st.text_input(
+                            "Valor *",
+                            key="depara_cust_val",
+                            placeholder="Ex: 1500.00",
+                        )
                     with _pcol2:
                         _cust_desc = st.text_input(
                             "Descrição *",
@@ -4508,13 +4515,27 @@ def main():
                         )
 
                     if st.button("✅ Aplicar conta personalizada", key="depara_cust_aplicar_btn", type="primary"):
-                        if not _cust_cod.strip() or not _cust_desc.strip():
-                            st.error("Código e Descrição são obrigatórios.")
+                        _erros_cust = []
+                        if not _cust_cod.strip():
+                            _erros_cust.append("Código")
+                        if not _cust_desc.strip():
+                            _erros_cust.append("Descrição")
+                        _cust_val = None
+                        if _cust_val_str.strip():
+                            try:
+                                _cust_val = float(_cust_val_str.replace(",", "."))
+                            except ValueError:
+                                _erros_cust.append("Valor (deve ser numérico)")
+                        else:
+                            _erros_cust.append("Valor")
+                        if _erros_cust:
+                            st.error(f"Campo(s) obrigatório(s): {', '.join(_erros_cust)}.")
                         else:
                             st.session_state[_ovr_key][_acct_idx] = {
                                 "code": _cust_cod.strip(),
                                 "mask": _cust_cls.strip(),
                                 "name": _cust_desc.strip(),
+                                "value": _cust_val,
                                 "custom": True,
                             }
                             st.rerun()
