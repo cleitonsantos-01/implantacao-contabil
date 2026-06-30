@@ -4322,22 +4322,27 @@ def main():
             _fonte = "IA (Claude)" if ai_sugs else "Automática (texto)"
             st.markdown(
                 f"**Fonte das sugestões: {_fonte}.** "
-                "Códigos em **:red[vermelho]** são sugestões automáticas. "
+                "Códigos em **:red[vermelho]** = sugestão automática | "
+                "**:green[verde]** = confirmado do plano BHub | "
+                "**:blue[azul]** = conta personalizada (fora do plano padrão).  \n"
                 "Use **✏️ Editar mapeamento** abaixo para ajustar."
             )
 
             _empresas_sug = df_sug["Empresa"].unique().tolist()
             _multi_empresa = len(_empresas_sug) > 1
 
-            # Índices com override manual (para estilo verde)
+            # Índices com override manual (para estilo verde/azul)
             _ovr_indices = set(st.session_state[_ovr_key].keys())
+            _custom_indices = {idx for idx, ov in st.session_state[_ovr_key].items() if ov.get("custom")}
 
             def _style_bhub_col(col):
-                """Vermelho = sugestão automática, verde = confirmado manualmente, cinza = vazio."""
+                """Vermelho = sugestão auto, verde = plano BHub confirmado, azul = conta personalizada, cinza = vazio."""
                 out = []
                 for idx, val in col.items():
                     if str(val) == "":
                         out.append("color: #888888")
+                    elif idx in _custom_indices:
+                        out.append("color: #0055cc; font-weight: bold")
                     elif idx in _ovr_indices:
                         out.append("color: #1a7f3c; font-weight: bold")
                     else:
@@ -4393,7 +4398,13 @@ def main():
                 _acct_row  = df_sug.loc[_acct_idx]
                 _is_manual = _acct_idx in _ovr_indices
 
-                _status_lbl = "confirmado manualmente ✅" if _is_manual else "sugestão automática 🔴"
+                _is_custom = _acct_idx in _custom_indices
+                if _is_custom:
+                    _status_lbl = "conta personalizada 🔵"
+                elif _is_manual:
+                    _status_lbl = "confirmado manualmente ✅"
+                else:
+                    _status_lbl = "sugestão automática 🔴"
                 st.info(
                     f"**Mapeamento atual ({_status_lbl}):**  \n"
                     f"Código: `{_acct_row['Cód. BHub'] or '—'}` | "
@@ -4401,69 +4412,114 @@ def main():
                     f"Nome: {_acct_row['Nome BHub Sugerido'] or '—'}"
                 )
 
-                st.markdown("**Buscar no plano de contas BHub:**")
-                _bcol1, _bcol2 = st.columns([4, 1])
-                with _bcol1:
-                    _busca_txt = st.text_input(
-                        "Termo:",
-                        key="depara_busca_txt",
-                        placeholder="Ex: banco, honorarios, 4046, 4.1.01...",
-                        label_visibility="collapsed",
-                    )
-                with _bcol2:
-                    _busca_modo = st.selectbox(
-                        "Por:",
-                        ["Descrição", "Código", "Classificação"],
-                        key="depara_busca_modo",
-                        label_visibility="collapsed",
-                    )
+                _modo_mapa = st.radio(
+                    "Como vincular esta conta:",
+                    ["🔍 Buscar no plano BHub", "➕ Conta personalizada (fora do plano)"],
+                    horizontal=True,
+                    key="depara_modo_mapa",
+                )
 
-                if _busca_txt.strip():
-                    _bterm = _busca_txt.strip().upper()
-                    if _busca_modo == "Código":
-                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["code"]).upper()]
-                    elif _busca_modo == "Classificação":
-                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["mask"]).upper()]
+                if _modo_mapa == "🔍 Buscar no plano BHub":
+                    st.markdown("**Buscar no plano de contas BHub:**")
+                    _bcol1, _bcol2 = st.columns([4, 1])
+                    with _bcol1:
+                        _busca_txt = st.text_input(
+                            "Termo:",
+                            key="depara_busca_txt",
+                            placeholder="Ex: banco, honorarios, 4046, 4.1.01...",
+                            label_visibility="collapsed",
+                        )
+                    with _bcol2:
+                        _busca_modo = st.selectbox(
+                            "Por:",
+                            ["Descrição", "Código", "Classificação"],
+                            key="depara_busca_modo",
+                            label_visibility="collapsed",
+                        )
+
+                    if _busca_txt.strip():
+                        _bterm = _busca_txt.strip().upper()
+                        if _busca_modo == "Código":
+                            _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["code"]).upper()]
+                        elif _busca_modo == "Classificação":
+                            _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["mask"]).upper()]
+                        else:
+                            _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["name"]).upper()]
+                        _res = _res[:200]
+
+                        if _res:
+                            _df_res = pd.DataFrame([
+                                {"Código": a["code"], "Classificação": a["mask"],
+                                 "Nome": a["name"], "Grupo": a["grupo"]}
+                                for a in _res
+                            ])
+                            st.caption(f"{len(_res)} conta(s) encontrada(s):")
+                            st.dataframe(
+                                _df_res, use_container_width=True,
+                                hide_index=True,
+                                height=min(40 * len(_df_res) + 38, 280),
+                            )
+                            _res_opts = [
+                                f"{a['code']} | {a['mask']} | {a['name']}"
+                                for a in _res
+                            ]
+                            _res_sel = st.selectbox(
+                                "Selecionar conta para aplicar:",
+                                _res_opts,
+                                key="depara_res_sel",
+                            )
+                            _conta_nova = _res[_res_opts.index(_res_sel)]
+
+                            if st.button("✅ Aplicar alteração", key="depara_aplicar_btn", type="primary"):
+                                st.session_state[_ovr_key][_acct_idx] = {
+                                    "code": _conta_nova["code"],
+                                    "mask": _conta_nova["mask"],
+                                    "name": _conta_nova["name"],
+                                }
+                                st.rerun()
+                        else:
+                            st.warning("Nenhuma conta encontrada. Tente outros termos.")
                     else:
-                        _res = [a for a in BHUB_ACCOUNTS if _bterm in str(a["name"]).upper()]
-                    _res = _res[:200]
+                        st.caption("Digite um termo para buscar (ex: banco, honorários, 4046).")
 
-                    if _res:
-                        _df_res = pd.DataFrame([
-                            {"Código": a["code"], "Classificação": a["mask"],
-                             "Nome": a["name"], "Grupo": a["grupo"]}
-                            for a in _res
-                        ])
-                        st.caption(f"{len(_res)} conta(s) encontrada(s):")
-                        st.dataframe(
-                            _df_res, use_container_width=True,
-                            hide_index=True,
-                            height=min(40 * len(_df_res) + 38, 280),
+                else:
+                    # ── Conta personalizada (fora do plano padrão BHub) ───────
+                    st.caption(
+                        "Preencha os dados da conta personalizada. "
+                        "Ela aparecerá em **azul** na tabela e será usada apenas nesta sessão."
+                    )
+                    _pcol1, _pcol2 = st.columns([1, 2])
+                    with _pcol1:
+                        _cust_cod = st.text_input(
+                            "Código *",
+                            key="depara_cust_cod",
+                            placeholder="Ex: 9001",
                         )
-                        _res_opts = [
-                            f"{a['code']} | {a['mask']} | {a['name']}"
-                            for a in _res
-                        ]
-                        _res_sel = st.selectbox(
-                            "Selecionar conta para aplicar:",
-                            _res_opts,
-                            key="depara_res_sel",
+                        _cust_cls = st.text_input(
+                            "Classificação",
+                            key="depara_cust_cls",
+                            placeholder="Ex: 9.1.01.01.00001",
                         )
-                        _conta_nova = _res[_res_opts.index(_res_sel)]
+                    with _pcol2:
+                        _cust_desc = st.text_input(
+                            "Descrição *",
+                            key="depara_cust_desc",
+                            placeholder="Ex: Adiantamento de Clientes Especial",
+                        )
 
-                        if st.button("✅ Aplicar alteração", key="depara_aplicar_btn", type="primary"):
+                    if st.button("✅ Aplicar conta personalizada", key="depara_cust_aplicar_btn", type="primary"):
+                        if not _cust_cod.strip() or not _cust_desc.strip():
+                            st.error("Código e Descrição são obrigatórios.")
+                        else:
                             st.session_state[_ovr_key][_acct_idx] = {
-                                "code": _conta_nova["code"],
-                                "mask": _conta_nova["mask"],
-                                "name": _conta_nova["name"],
+                                "code": _cust_cod.strip(),
+                                "mask": _cust_cls.strip(),
+                                "name": _cust_desc.strip(),
+                                "custom": True,
                             }
                             st.rerun()
-                    else:
-                        st.warning("Nenhuma conta encontrada. Tente outros termos.")
-                else:
-                    st.caption("Digite um termo para buscar (ex: banco, honorários, 4046).")
 
-                if _is_manual:
+                if _is_manual or _is_custom:
                     if st.button("🔄 Restaurar sugestão automática", key="depara_clear_ovr"):
                         st.session_state[_ovr_key].pop(_acct_idx, None)
                         st.rerun()
